@@ -31,14 +31,12 @@ typedef struct _OBJECT_ATTRIBUTES {
 }  OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
 
 
-typedef struct _CURDIR
-{
+typedef struct _CURDIR {
 	UNICODE_STRING DosPath;
 	HANDLE Handle;
 } CURDIR, *PCURDIR;
 
-typedef struct _RTL_DRIVE_LETTER_CURDIR
-{
+typedef struct _RTL_DRIVE_LETTER_CURDIR {
 	USHORT Flags;
 	USHORT Length;
 	ULONG  TimeStamp;
@@ -46,8 +44,7 @@ typedef struct _RTL_DRIVE_LETTER_CURDIR
 
 } RTL_DRIVE_LETTER_CURDIR, *PRTL_DRIVE_LETTER_CURDIR;
 
-typedef struct _RTL_USER_PROCESS_PARAMETERS
-{
+typedef struct _RTL_USER_PROCESS_PARAMETERS {
 	ULONG MaximumLength;                            // Should be set before call RtlCreateProcessParameters
 	ULONG Length;                                   // Length of valid structure
 	ULONG Flags;                                    // Currently only PPF_NORMALIZED (1) is known:
@@ -85,15 +82,24 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS
 } RTL_USER_PROCESS_PARAMETERS, *PRTL_USER_PROCESS_PARAMETERS;
 
 /*
- * https://msdn.microsoft.com/fr-fr/library/windows/desktop/ms684280(v=vs.85).aspx
+ * Slightly modified version of : https://msdn.microsoft.com/en-us/library/windows/desktop/aa813706(v=vs.85).aspx
+ * 
+ * Modified with info from windbg (dt nt!_PEB). Only the fields relevant to 
+ * the specific task of this program are listed here.
  */
-typedef struct _PROCESS_BASIC_INFORMATION {
-	PVOID Reserved1;
-	PPEB PebBaseAddress; //TODO : Create a PEB struct
-	PVOID Reserved2[2];
-	ULONG_PTR UniqueProcessId;
-	PVOID Reserved3;
-} PROCESS_BASIC_INFORMATION;
+// size = 1964
+typedef struct _PEB {
+	BYTE							Reserved1[2];
+	BYTE							BeingDebugged;
+	BYTE							Reserved2[13];
+	PVOID							ImageBaseAddress;
+	PVOID							LoaderData;
+	PRTL_USER_PROCESS_PARAMETERS	ProcessParameters;
+	BYTE							Reserved3[520];
+	PVOID							PostProcessInitRoutine;
+	BYTE							Reserved4[136];
+	ULONG							SessionId;
+} PEB, *PPEB;
 
 typedef enum _PROCESSINFOCLASS {
 	ProcessBasicInformation,
@@ -133,6 +139,17 @@ typedef enum _PROCESSINFOCLASS {
 } PROCESSINFOCLASS;
 
 /*
+ * https://msdn.microsoft.com/fr-fr/library/windows/desktop/ms684280(v=vs.85).aspx
+ */
+typedef struct _PROCESS_BASIC_INFORMATION {
+	PVOID Reserved1;
+	PPEB PebBaseAddress;
+	PVOID Reserved2[2];
+	ULONG_PTR UniqueProcessId;
+	PVOID Reserved3;
+} PROCESS_BASIC_INFORMATION;
+
+/*
  * Pointer to the NtCreateSection() function.
  */
 typedef NTSTATUS (NTAPI *NT_CREATE_SECTION)(
@@ -165,17 +182,17 @@ typedef NTSTATUS (NTAPI *NT_CREATE_PROCESS_EX)
  * Pointer to the NtCreatThreadEx() function.
  */
 typedef NTSTATUS (NTAPI *NT_CREATE_THREAD_EX) (
-    OUT PHANDLE				ThreadHandle, 
-    IN  ACCESS_MASK			DesiredAccess, 
-    IN  POBJECT_ATTRIBUTES	ObjectAttributes	OPTIONAL, 
-    IN  HANDLE				ProcessHandle,
-    IN  PVOID				StartRoutine,
-    IN  PVOID				Argument			OPTIONAL,
-    IN  ULONG				CreateFlags,
-    IN  ULONG_PTR			ZeroBits, 
-    IN  SIZE_T				StackSize			OPTIONAL,
-    IN  SIZE_T				MaximumStackSize	OPTIONAL, 
-    IN  PVOID				AttributeList		OPTIONAL
+    OUT PHANDLE					ThreadHandle, 
+    IN  ACCESS_MASK				DesiredAccess, 
+    IN  POBJECT_ATTRIBUTES		ObjectAttributes	OPTIONAL, 
+    IN  HANDLE					ProcessHandle,
+    IN  LPTHREAD_START_ROUTINE	StartRoutine,
+    IN  PVOID					Argument			OPTIONAL,
+    IN  ULONG					CreateFlags,
+    IN  ULONG_PTR				ZeroBits, 
+    IN  SIZE_T					StackSize			OPTIONAL,
+    IN  SIZE_T					MaximumStackSize	OPTIONAL, 
+    IN  PVOID					AttributeList		OPTIONAL
 );
 
 /*
@@ -212,4 +229,26 @@ typedef NTSTATUS (WINAPI *NT_QUERY_INFORMATION_PROCESS)(
   IN	PVOID				ProcessInformation,
   IN	ULONG				ProcessInformationLength,
   OUT	PULONG				ReturnLength	OPTIONAL
+);
+
+/*
+ * Pointer to the NtReadVirtualMemory() function.
+ */
+typedef NTSTATUS (NTAPI *NT_READ_VIRTUAL_MEMORY)(
+	IN	HANDLE	ProcessHandle,
+	IN	PVOID	BaseAddress,
+	OUT	PVOID	Buffer				OPTIONAL,
+	IN	SIZE_T	BufferSize,
+	OUT	PSIZE_T	NumberOfBytesRead	OPTIONAL
+);
+
+/*
+ * Pointer to the NtWriteVirtualMemory() function.
+ */
+typedef NTSTATUS (NTAPI *NT_WRITE_VIRTUAL_MEMORY)(
+	IN	HANDLE	ProcessHandle,
+	IN	PVOID	BaseAddress,
+	OUT	PVOID	Buffer				OPTIONAL,
+	IN	SIZE_T	BufferSize,
+	OUT	PSIZE_T	NumberOfBytesRead	OPTIONAL
 );
