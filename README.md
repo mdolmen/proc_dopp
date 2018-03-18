@@ -1,7 +1,5 @@
 # Process Doppelganging
 
-_Work in progress._
-
 My implementation of the process doppelganging injection technique presented at
 the Black Hat 2017.
 
@@ -10,3 +8,10 @@ the Black Hat 2017.
 
 Got help from :
 https://hshrzd.wordpress.com/2017/12/18/process-doppelganging-a-new-way-to-impersonate-a-process/ , especially for the undocumented functions definitions.
+
+## Status
+
+Partially working version on Windows 10 (1709) x64 : start successfully a
+console application but failed to start a GUI one. There is also an issue with
+the name in the process list which doesn't take the program name (_System idle
+process_ instead).

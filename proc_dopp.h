@@ -198,7 +198,7 @@ typedef NTSTATUS (NTAPI *NT_CREATE_THREAD_EX) (
 /*
  * Pointer to the RtlCreateProcessParameters() function.
  */
-typedef NTSTATUS(NTAPI *RTL_CREATE_PROCESS_PARAMETERS)(
+typedef NTSTATUS(NTAPI *RTL_CREATE_PROCESS_PARAMETERS_EX)(
 	OUT PRTL_USER_PROCESS_PARAMETERS	*pProcessParameters,
 	IN	PUNICODE_STRING					ImagePathName,
 	IN	PUNICODE_STRING					DllPath				OPTIONAL,
@@ -215,7 +215,7 @@ typedef NTSTATUS(NTAPI *RTL_CREATE_PROCESS_PARAMETERS)(
 /*
  * Pointer to the RtlInitUnicodeString() function.
  */
-typedef VOID (WINAPI *RTL_INIT_UNICODE_STRING)(
+typedef VOID (NTAPI *RTL_INIT_UNICODE_STRING)(
   OUT	PUNICODE_STRING DestinationString,
   IN	PCWSTR          SourceString	OPTIONAL
 );
@@ -223,7 +223,7 @@ typedef VOID (WINAPI *RTL_INIT_UNICODE_STRING)(
 /*
  * Pointer to the NtQueryInformationProcess() function.
  */
-typedef NTSTATUS (WINAPI *NT_QUERY_INFORMATION_PROCESS)(
+typedef NTSTATUS (NTAPI *NT_QUERY_INFORMATION_PROCESS)(
   IN	HANDLE				ProcessHandle,
   IN	PROCESSINFOCLASS	ProcessInformationClass,
   IN	PVOID				ProcessInformation,
