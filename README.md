@@ -11,7 +11,10 @@ https://hshrzd.wordpress.com/2017/12/18/process-doppelganging-a-new-way-to-imper
 
 ## Status
 
-Partially working version on Windows 10 (1709) x64 : start successfully a
-console application but failed to start a GUI one. There is also an issue with
-the name in the process list which doesn't take the program name (_System idle
-process_ instead).
+Partially working version on Windows 10 (1709) x64 : 
+
+- Starts successfully a console application but failed to start a GUI one (need
+  to modify the DLL path in the process parameters and maybe pass it an
+  environment variables pointer).
+- There is also an issue with the name in the process list which doesn't take
+  the program name (_System idle process_ instead).
