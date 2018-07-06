@@ -73,7 +73,7 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS {
 	UNICODE_STRING DesktopInfo;                     // Name of WindowStation and Desktop objects, where process is assigned
 	UNICODE_STRING ShellInfo;
 	UNICODE_STRING RuntimeData;
-	RTL_DRIVE_LETTER_CURDIR CurrentDirectores[0x20];
+	RTL_DRIVE_LETTER_CURDIR CurrentDirectories[0x20];
 	ULONGLONG EnvironmentSize;
 	ULONGLONG EnvironmentVersion;
 	PVOID PackageDependencyData;
@@ -195,6 +195,19 @@ typedef NTSTATUS (NTAPI *NT_CREATE_THREAD_EX) (
     IN  PVOID					AttributeList		OPTIONAL
 );
 
+typedef DWORD(WINAPI * RTL_CREATE_USER_THREAD) (
+	IN HANDLE 					ProcessHandle,
+	IN PSECURITY_DESCRIPTOR 	SecurityDescriptor,
+	IN BOOL 					CreateSuspended,
+	IN ULONG					StackZeroBits,
+	IN OUT PULONG				StackReserved,
+	IN OUT PULONG				StackCommit,
+	IN LPVOID					StartAddress,
+	IN LPVOID					StartParameter,
+	OUT HANDLE 					ThreadHandle,
+	OUT LPVOID					ClientID
+);
+
 /*
  * Pointer to the RtlCreateProcessParameters() function.
  */
@@ -245,10 +258,17 @@ typedef NTSTATUS (NTAPI *NT_READ_VIRTUAL_MEMORY)(
 /*
  * Pointer to the NtWriteVirtualMemory() function.
  */
-typedef NTSTATUS (NTAPI *NT_WRITE_VIRTUAL_MEMORY)(
+typedef NTSTATUS(NTAPI *NT_WRITE_VIRTUAL_MEMORY)(
 	IN	HANDLE	ProcessHandle,
 	IN	PVOID	BaseAddress,
 	OUT	PVOID	Buffer				OPTIONAL,
 	IN	SIZE_T	BufferSize,
 	OUT	PSIZE_T	NumberOfBytesRead	OPTIONAL
+);
+/*
+ * Pointer to the RtlCreateEnvironment() function.
+ */
+typedef NTSTATUS (NTAPI *RTL_CREATE_ENVIRONMENT)(
+	IN	BOOLEAN Inherit,
+	OUT	PVOID	*Environment
 );

